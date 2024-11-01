@@ -1,19 +1,23 @@
 import React, { useState, useEffect } from 'react';
+import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { Login, Register } from './components/Auth';
+import FileGenerator from './components/FileGenerator';
 import axios from 'axios';
 import './App.css';
 
 export default function App() {
-  const [input, setInput] = useState('');
-  const [mode, setMode] = useState('excel');
-  const [fileURL, setFileURL] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
   const [theme, setTheme] = useState('light');
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const navigate = useNavigate();
 
   useEffect(() => {
     const savedTheme = localStorage.getItem('theme') || 'light';
     setTheme(savedTheme);
     document.body.setAttribute('data-theme', savedTheme);
+
+    // Check token for authentication
+    const token = localStorage.getItem('token');
+    setIsAuthenticated(!!token);
   }, []);
 
   const toggleTheme = () => {
@@ -23,93 +27,45 @@ export default function App() {
     document.body.setAttribute('data-theme', newTheme);
   };
 
-  const sendMessage = async (message) => {
-    setLoading(true);
-    setError(null);
-    setFileURL(null);
-
+  const handleLogout = async () => {
     try {
-      let response;
-      if (mode === 'pdf') {
-        response = await axios.get('http://localhost:8000/file_ai/pdf_request/', {
-          params: { query: message },
-          responseType: 'blob',
-        });
-      } else if (mode === 'excel') {
-        response = await axios.get('http://localhost:8000/file_ai/xl_request/', {
-          params: { query: message },
-          responseType: 'blob',
-        });
+      const token = localStorage.getItem('token');
+      const response = await axios.post('http://localhost:8000/user_auth/logout/', { token });
+
+      if (response.status === 200) {
+        localStorage.removeItem('token');
+        setIsAuthenticated(false);
+        navigate('/login'); // Redirect to login after logout
+      } else {
+        console.error('Logout failed:', response.data.error);
       }
-
-      const blob = new Blob([response.data], { type: response.headers['content-type'] });
-      const url = window.URL.createObjectURL(blob);
-      setFileURL(url);
-    } catch (err) {
-      setError('An error occurred while processing your request. Please try using a more accurate prompt with all details. ');
-      console.error('Error:', err);
-    } finally {
-      setLoading(false);
+    } catch (error) {
+      console.error('Error during logout:', error.response?.data || error.message);
     }
-  };
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (!input.trim()) return;
-    sendMessage(input);
-  };
-
-  const handleModeChange = (e) => {
-    setMode(e.target.value);
-    setFileURL(null);
-    setError(null);
   };
 
   return (
     <div className="app">
-      <div className="content">
-        <div className="header">
-          <h1 className="title">File AI</h1>
-          <button onClick={toggleTheme} className="theme-toggle">
+      <div className="header">
+        <h1 className="title">File AI</h1>
+        <div className="header-controls">
+          {isAuthenticated && (
+            <button onClick={handleLogout} className="logout-button" aria-label="Logout">
+              Logout
+            </button>
+          )}
+          <button onClick={toggleTheme} className="theme-toggle" aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}>
             {theme === 'light' ? '🌙' : '☀️'}
           </button>
         </div>
-        
-        <div className="mode-selection">
-          <select value={mode} onChange={handleModeChange}>
-            <option value="pdf">PDF Mode</option>
-            <option value="excel">Excel Mode</option>
-          </select>
-        </div>
-        
-        <form onSubmit={handleSubmit} className="input-form">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Type your question..."
-            rows={5}
-          />
-          <button type="submit" disabled={loading}>
-            {loading ? <div className="loader"></div> : 'Generate'}
-          </button>
-        </form>
-
-        {error && (
-          <div className="error-message">
-            {error}
-          </div>
-        )}
-
-        {fileURL && (
-          <a
-            href={fileURL}
-            download={`output.${mode === 'pdf' ? 'pdf' : 'xlsx'}`}
-            className="download-button"
-          >
-            Download {mode.toUpperCase()} File
-          </a>
-        )}
       </div>
+
+      <Routes>
+        <Route path="/" element={isAuthenticated ? <FileGenerator theme={theme} /> : <Navigate to="/login" replace />} />
+        <Route path="/dashboard" element={isAuthenticated ? <FileGenerator theme={theme} /> : <Navigate to="/login" replace />} />
+        <Route path="/login" element={!isAuthenticated ? <Login onLoginSuccess={() => { setIsAuthenticated(true); navigate('/dashboard'); }} /> : <Navigate to="/dashboard" replace />} />
+        <Route path="/register" element={!isAuthenticated ? <Register /> : <Navigate to="/" replace />} />
+      </Routes>
     </div>
   );
 }

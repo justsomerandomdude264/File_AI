@@ -10,34 +10,19 @@ import subprocess
 import uuid
 import re
 import io
-from .gpt_functions_class import GPTFunctions
-
-# Initialize GPTFunctions class
-gpt_functions = GPTFunctions()
 
 # API request to get a excel file made according to the query (GET request only)
-@api_view(['POST'])
+@api_view(['GET'])
 def xl_request(request):
     try:
         # Get the query (prompt) from the request
-        prompt = request.data.get('query')
-        if not prompt:
-            return Response({"error": "No prompt provided"}, status=status.HTTP_400_BAD_REQUEST)
+        chatgpt_query = request.query_params.get('query', '')
+        if not chatgpt_query:
+            return Response({"error": "No query provided"}, status=status.HTTP_400_BAD_REQUEST)
 
         # Run the query and get the Excel-related Python code from chatgpt
-        result = gpt_functions.generate_excel_code(prompt)
+        xl_code = xl_query(chatgpt_query)
         
-        # Check for errors
-        if not (result['status'] == 'success'):
-            print(result["message"])
-            return Response(
-                {"error": result["message"]}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-        
-        # Get the xl code
-        xl_code = result["excel_code"]
-
         # Change the output from saving the file to drive to instead saving it in the memory and returning it to avoid temp files
         # Use regex to find and capture the filename in wb.save("filename.xlsx")
         save_pattern = r'wb\.save\(["\'](.+?)["\']\)'
@@ -78,33 +63,21 @@ def xl_request(request):
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     except Exception as e:
-        print(e)
         # General error handling
         return Response({"error": f"An error occurred: {str(e)}"}, 
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 # API request to get a pdf file made using latex according to the query (GET request only)
-@api_view(['POST'])
+@api_view(['GET'])
 def pdf_request(request):
     try:
         # Get the query from the request
-        content = request.data.get('content')
-        if not content:
-            return Response({"error": "No content provided"}, status=status.HTTP_400_BAD_REQUEST)
+        query = request.query_params.get('query', '')
+        if not query:
+            return Response({"error": "No query provided"}, status=status.HTTP_400_BAD_REQUEST)
 
         # Get the LaTeX code according to the query
-        result = gpt_functions.convert_to_latex(content)
-
-        # Check for errors
-        if not (result['status'] == 'success'):
-            print(result["message"])
-            return Response(
-                {"error": result["message"]}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-        # Get the latex code
-        latex_code = result["latex_code"]
+        latex_code = pdf_query(query)
 
         # Ensure api_temp directory exists
         api_temp_dir = os.path.join(os.path.dirname(__file__), 'api_temp')
@@ -148,7 +121,6 @@ def pdf_request(request):
             return response
         
         except subprocess.CalledProcessError as e:
-            print(e)
             # Handle errors related to pdflatex execution
             return Response({
                 "error": f"PDF generation failed: {e}",
@@ -168,39 +140,6 @@ def pdf_request(request):
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     except Exception as e:
-        print(e)
         # General error handling
         return Response({"error": f"An error occurred: {str(e)}"}, 
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
-
-@api_view(['POST'])
-def pdf_content_request(request):
-    """
-    API endpoint to generate initial content based on user prompt
-    """
-    try:
-        # Get prompt from request data
-        prompt = request.data.get("query")
-        if not prompt:
-            return Response(
-                {"error": "No prompt provided"}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Generate content using GPTFunctions
-        result = gpt_functions.generate_initial_content(prompt)
-        
-        if result["status"] == "success":
-            return Response(result, status=status.HTTP_200_OK)
-        else:
-            return Response(
-                {"error": result["message"]}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-    except Exception as e:
-        return Response(
-            {"error": f"An error occurred: {str(e)}"}, 
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
