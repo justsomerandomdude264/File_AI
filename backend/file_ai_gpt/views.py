@@ -1,33 +1,75 @@
-# Imports
+from django.http import FileResponse
+from django.utils import timezone
+
 from rest_framework.decorators import api_view
-from .gpt_functions import xl_query, pdf_query
 from rest_framework.response import Response
 from rest_framework import status
-from django.http import FileResponse, HttpResponse
+
+from user_auth.models import UserTokenAuth
+from .gpt_functions_class import GPTFunctions
+
 from openpyxl import Workbook
 import os
 import subprocess
 import uuid
 import re
 import io
-from .gpt_functions_class import GPTFunctions
 
 # Initialize GPTFunctions class
 gpt_functions = GPTFunctions()
 
-# API request to get a excel file made according to the query (GET request only)
+'''Helper Functions'''
+
+def is_user_verfied(token_obj: UserTokenAuth) -> bool:
+    return token_obj.email_verified and token_obj.phone_verified
+
+# Check if user has remaining requests and decrease them by one
+def limit_requests(token_obj: UserTokenAuth) -> bool:
+    today = timezone.now().date()
+    if token_obj.last_request_date != today:
+        token_obj.request_count = 1
+        token_obj.last_request_date = today
+        token_obj.save()
+        return True
+
+    elif token_obj.request_count >= 5:
+        return False    
+    
+    else:
+        token_obj.request_count = token_obj.request_count + 1
+        token_obj.save()
+        return True
+    
+def validate_token(token: str) -> UserTokenAuth | bool:
+    try:
+        token_obj = UserTokenAuth.objects.get(token=token)
+        return token_obj
+    except UserTokenAuth.DoesNotExist:
+        return False
+
+'''API Views'''
+
 @api_view(['POST'])
 def xl_request(request):
     try:
-        # Get the query (prompt) from the request
-        prompt = request.data.get('query')
+        prompt = request.data.get("query", "").strip()
+        token = request.data.get("token", "").strip()
+
         if not prompt:
             return Response({"error": "No prompt provided"}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Run the query and get the Excel-related Python code from chatgpt
-        result = gpt_functions.generate_excel_code(prompt)
         
-        # Check for errors
+        token_obj = validate_token(token)
+        if not token_obj:
+            return Response({"error": "Token is invalid"}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        if not is_user_verfied(token_obj):
+            return Response({"error": "You have not verified your account please go through verfication: \n Delete this account and Remake it WITH OTP VERIFICATION OF BOTH PHONE AND EMAIL"}, status=status.HTTP_403_FORBIDDEN)
+
+        if not limit_requests(token_obj) :
+            return Response({"error": "You have ran out of the 3 daily requests, Try again tommorow."}, status=status.HTTP_403_FORBIDDEN)
+
+        result = gpt_functions.generate_excel_code(prompt)
+    
         if not (result['status'] == 'success'):
             print(result["message"])
             return Response(
@@ -35,30 +77,21 @@ def xl_request(request):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
-        # Get the xl code
         xl_code = result["excel_code"]
 
-        # Change the output from saving the file to drive to instead saving it in the memory and returning it to avoid temp files
+        # Change the output from saving the file to drive, to instead saving it in the memory and returning it thus to avoid temp files
         # Use regex to find and capture the filename in wb.save("filename.xlsx")
         save_pattern = r'wb\.save\(["\'](.+?)["\']\)'
         match = re.search(save_pattern, xl_code)
 
         if match:
-            # Extract the filename from the match
             filename = match.group(1)
-
-            # Replace wb.save("filename.xlsx") with wb.save(output)
             xl_code = re.sub(save_pattern, 'wb.save(output)', xl_code)
         else:
-            # Default filename if no match is found
             filename = "generated_excel.xlsx"
 
-        # Create an in-memory output file for the Excel workbook
         output = io.BytesIO()
-
-        # Dynamically execute the code
         exec(xl_code, {"output": output, "io": io, "Workbook": Workbook})
-
         # Ensure the pointer is at the beginning of the BytesIO object
         output.seek(0)
 
@@ -67,35 +100,37 @@ def xl_request(request):
             return Response({"error": "Workbook generation failed or workbook is empty."}, 
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # Return the Excel file as an HTTP response with the captured filename
-        response = HttpResponse(output, content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        response = FileResponse(output, content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
 
         return response
 
-    except (KeyError, ValueError) as e:
-        # Handle specific errors (like missing keys, invalid values)
-        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
     except Exception as e:
-        print(e)
-        # General error handling
         return Response({"error": f"An error occurred: {str(e)}"}, 
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-# API request to get a pdf file made using latex according to the query (GET request only)
+# API request to get a pdf file made using latex according to the content 
 @api_view(['POST'])
 def pdf_request(request):
     try:
-        # Get the query from the request
-        content = request.data.get('content')
+        content = request.data.get('content', '')
+        token = request.data.get("token", "").strip()
+
         if not content:
             return Response({"error": "No content provided"}, status=status.HTTP_400_BAD_REQUEST)
+    
+        token_obj = validate_token(token)
+        if not token_obj:
+            return Response({"error": "Token is invalid"}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # Get the LaTeX code according to the query
+        if not is_user_verfied(token_obj):
+            return Response({"error": "You have not verified your account please go through verfication: \n Delete this account and Remake it WITH OTP VERIFICATION OF BOTH PHONE AND EMAIL"}, status=status.HTTP_403_FORBIDDEN)
+
+        if not limit_requests(token_obj) :
+            return Response({"error": "You have ran out of the 3 daily requests, Try again tommorow."}, status=status.HTTP_403_FORBIDDEN)
+
         result = gpt_functions.convert_to_latex(content)
 
-        # Check for errors
         if not (result['status'] == 'success'):
             print(result["message"])
             return Response(
@@ -103,7 +138,6 @@ def pdf_request(request):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-        # Get the latex code
         latex_code = result["latex_code"]
 
         # Ensure api_temp directory exists
@@ -123,7 +157,7 @@ def pdf_request(request):
             with open(tex_file, 'w', encoding='utf-8') as f:
                 f.write(latex_code)
 
-            # Run pdflatex to convert latex to pdf
+            # Run pdflatex to convert latex (.tex) to pdf
             process = subprocess.run(
                 ['pdflatex', '-output-directory', api_temp_dir, tex_file],
                 check=True, 
@@ -133,12 +167,10 @@ def pdf_request(request):
                 timeout=15
             )
 
-            # Check if PDF was created
             if not os.path.exists(pdf_file):
                 return Response({"error": "PDF file was not created"}, 
                                 status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-            # Return the PDF file as a FileResponse
             response = FileResponse(open(pdf_file, 'rb'), content_type='application/pdf')
             response['Content-Disposition'] = f'attachment; filename="{file_name}.pdf"'
 
@@ -149,7 +181,6 @@ def pdf_request(request):
         
         except subprocess.CalledProcessError as e:
             print(e)
-            # Handle errors related to pdflatex execution
             return Response({
                 "error": f"PDF generation failed: {e}",
                 "stdout": e.stdout,
@@ -157,38 +188,39 @@ def pdf_request(request):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
         except subprocess.TimeoutExpired:
-            # Handle timeout error (related to pdflatex)
             subprocess.Popen(['python', '-c', f"import os, time; time.sleep(1); os.remove(r'{tex_file}'); os.remove(r'{log_file}');"])
             return Response({
                 "error": "PDF generation took too long. Please refine your query or prompt."
             }, status=status.HTTP_504_GATEWAY_TIMEOUT)
 
-    except (KeyError, ValueError) as e:
-        # Handle specific errors (like missing keys, invalid values)
-        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
     except Exception as e:
         print(e)
-        # General error handling
         return Response({"error": f"An error occurred: {str(e)}"}, 
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
 
 @api_view(['POST'])
 def pdf_content_request(request):
-    """
-    API endpoint to generate initial content based on user prompt
-    """
     try:
-        # Get prompt from request data
-        prompt = request.data.get("query")
+        prompt = request.data.get("query", "")
+        token = request.data.get("token", "").strip()
+
         if not prompt:
             return Response(
                 {"error": "No prompt provided"}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Generate content using GPTFunctions
+        token_obj = validate_token(token)
+        if not token_obj:
+            return Response({"error": "Token is invalid"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        if not is_user_verfied(token_obj):
+            return Response({"error": "You have not verified your account please go through verfication: \n Delete this account and Remake it WITH OTP VERIFICATION OF BOTH PHONE AND EMAIL"}, status=status.HTTP_403_FORBIDDEN)
+
+        if not limit_requests(token_obj):
+            return Response({"error": "You have ran out of the 3 daily requests, Try again tommorow."}, status=status.HTTP_403_FORBIDDEN)
+
         result = gpt_functions.generate_initial_content(prompt)
         
         if result["status"] == "success":

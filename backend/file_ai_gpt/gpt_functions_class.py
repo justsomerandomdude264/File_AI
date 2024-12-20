@@ -2,14 +2,13 @@ from typing import Dict
 import openai
 import os
 
-
-
+# Class including all functions related to ChatGPT API
 class GPTFunctions:
     def __init__(self, client: openai.OpenAI = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))):
         print("OpenAI Api Key initiated")
         self.client = client
 
-    def generate_initial_content(self, prompt: str) -> Dict:
+    def generate_initial_content(self, prompt: str) -> Dict[str, str]:
         print("Using Api Key")
         """
         Generate initial content based on user prompt.
@@ -118,7 +117,7 @@ For more information on `openpyxl`, refer to the official documentation at https
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-    def convert_to_latex(self, edited_content: str) -> Dict:
+    def convert_to_latex(self, edited_content: str) -> Dict[str, str]:
         print("Using Api Key")
         """
         Convert the edited content into LaTeX code ready for PDF compilation.
@@ -213,7 +212,7 @@ Automating Excel tasks with Python can enhance productivity and streamline data 
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-    def generate_excel_code(self, query: str) -> Dict:
+    def generate_excel_code(self, query: str) -> Dict[str, str]:
         print("Using Api Key")
         """
         Generate Python code for creating Excel reports based on the query.
