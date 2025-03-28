@@ -1,1 +1,8 @@
-.env
+# Enviroment File
+.env 
+
+# Python Enviroment
+venv
+
+# API temporary files
+backend/file_ai_gpt/api_temp/*

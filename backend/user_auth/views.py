@@ -1,287 +1,282 @@
 from django.core.exceptions import ValidationError
 from django.core.validators import EmailValidator
 from django.utils import timezone
-
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
-
 from .serializers import AuthSerializer
 from .models import Auth, UserTokenAuth
 from .helpers import send_email_otp, send_otp_phone
-
-from typing import NoReturn
 import re
 import hashlib
 import secrets
 import logging
+import os
 
 
 logger = logging.getLogger(__name__)
 
-'''Helper Functions'''
+# Utility Functions
 
-# Centralized validation functions
-def validate_email(email: str) -> NoReturn:
+def validate_email(email: str):
     """Validate email format and length."""
     if len(email) < 3 or len(email) > 255:
         raise ValidationError("Email must be between 3 and 255 characters.")
     EmailValidator()(email)
 
-def validate_username(username: str) -> NoReturn:
+def validate_username(username: str):
     """Validate username length."""
     if len(username) < 3 or len(username) > 255:
         raise ValidationError("Username must be between 3 and 255 characters.")
 
-def validate_password(password: str) -> NoReturn:
+def validate_password(password: str):
     """Validate password length."""
     if len(password) < 6:
         raise ValidationError("Password must be at least 6 characters long.")
 
-def validate_phone_number(phoneno: str) -> NoReturn:
+def validate_phone_number(phoneno: str):
     """Validate phone number format."""
     if not re.match(r'^\+?1?\d{9,15}$', phoneno):
         raise ValidationError("Invalid phone number format.")
 
-# Text to SHA256 hash
 def encrypt_sha256(text: str) -> str:
+    """Convert text into SHA256 hash."""
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
-# Exception handler decorator
-def handle_exceptions(func):
-    """Decorator to handle exceptions gracefully and log errors."""
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except ValidationError as e:
-            logger.error(f"Validation Error: {e}")
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            logger.exception("Unexpected error occurred")
-            return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    return wrapper
-
-'''API Views'''
+# API Views
 
 @api_view(['POST'])
-@handle_exceptions
 def register(request):
-    """Handle user registration."""
+    """
+    Handle user registration.
+
+    Checks the validity of all entries,
+    Checks uniqueness,
+    Makes the Auth object and
+    also make the Token Object.
+    """
     email = request.data.get('email', '').strip()
     username = request.data.get('username', '').strip()
     password = request.data.get('password', '').strip()
     phoneno = request.data.get('phoneno', '').strip()
 
-    validate_email(email)
-    validate_username(username)
-    validate_password(password)
-    validate_phone_number(phoneno)
+    try:
+        validate_email(email)
+        validate_username(username)
+        validate_password(password)
+        validate_phone_number(phoneno)
 
-    if Auth.objects.filter(email=email).exists():
-        raise ValidationError("Email is already registered.")
-    if Auth.objects.filter(username=username).exists():
-        raise ValidationError("Username is already taken.")
-    if Auth.objects.filter(phone_no=phoneno).exists():
-        raise ValidationError("Phone number is already registered.")
+        if Auth.objects.filter(email=email).exists():
+            return Response({"error": "Email is already registered."}, status=status.HTTP_400_BAD_REQUEST)
+        if Auth.objects.filter(username=username).exists():
+            return Response({"error": "Username is already taken."}, status=status.HTTP_400_BAD_REQUEST)
+        if Auth.objects.filter(phone_no=phoneno).exists():
+            return Response({"error": "Phone number is already registered."}, status=status.HTTP_400_BAD_REQUEST)
 
-    hashed_password = encrypt_sha256(password)
+        hashed_password = encrypt_sha256(password)
+        data = {'email': email, 'username': username, 'passwordhash': hashed_password, 'phone_no': phoneno}
+        serializer = AuthSerializer(data=data)
 
-    data = {
-        'email': email,
-        'username': username,
-        'passwordhash': hashed_password,
-        'phone_no': phoneno
-    }
+        if serializer.is_valid():
+            user = serializer.save()
+            token_obj = UserTokenAuth.objects.create(token=secrets.token_urlsafe(20), user=user, request_count=0, last_request_date=None, created=timezone.now())
+            return Response({"token": token_obj.token}, status=status.HTTP_201_CREATED)
+        else:
+            logger.error(f"Serialization Error: {serializer.errors}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    serializer = AuthSerializer(data=data)
-
-    if not serializer.is_valid():
-        logger.error(f"Serialization Error: {serializer.errors}")
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
-    user = serializer.save()
-
-    # Generate a token for the user
-    token_obj = UserTokenAuth.objects.create(
-        token=secrets.token_urlsafe(20),
-        user=user,
-        request_count=0,
-        last_request_date=None,
-        created=timezone.now()
-    )
-
-    return Response({"token": token_obj.token}, status=status.HTTP_201_CREATED)
-        
+    except ValidationError as e:
+        logger.error(f"Validation Error: {e}")
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.exception("Unexpected error occurred")
+        return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
-@handle_exceptions
 def login(request):
-    """Handle user login."""
+    """
+    Handles user login.
+
+    Checks authenticity of data,
+    Logs the user in and return the token of the respective user.
+    """
     email = request.data.get('email', '').strip()
     password = request.data.get('password', '').strip()
 
-    if not email or not password:
-        raise ValidationError("Email and password are required.")
-
-    validate_email(email)
-    validate_password(password)
-
-    hashed_password = encrypt_sha256(password)
-
     try:
+        if not email or not password:
+            return Response({"error": "Email and password are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        validate_email(email)
+        validate_password(password)
+
+        hashed_password = encrypt_sha256(password)
         user = Auth.objects.get(email=email)
+
         if user.passwordhash != hashed_password:
-            raise ValidationError("Invalid credentials.")
+            return Response({"error": "Invalid credentials."}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # Generate or retrieve the user's token
-        token_obj, _created = UserTokenAuth.objects.get_or_create(
-            user=user,
-            defaults={
-                'token': secrets.token_urlsafe(20),
-                'request_count': 0,
-                'last_request_date': None,
-                'created': timezone.now()
-            }
-        )
-
+        token_obj, _ = UserTokenAuth.objects.get_or_create(user=user, defaults={'token': secrets.token_urlsafe(20), 'request_count': 0, 'last_request_date': None, 'created': timezone.now()})
         return Response({"token": token_obj.token}, status=status.HTTP_202_ACCEPTED)
+
+    except ValidationError as e:
+        logger.error(f"Validation Error: {e}")
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
     except Auth.DoesNotExist:
-        # If user does not exist return error
-        raise ValidationError("Invalid credentials.")
+        return Response({"error": "Invalid credentials."}, status=status.HTTP_401_UNAUTHORIZED)
+    except Exception as e:
+        logger.exception("Unexpected error occurred")
+        return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
-@handle_exceptions
 def logout(request):
-    """Handle user logout by invalidating the token."""
+    """Logs the user out, deleting the user token."""
     token = request.data.get("token", "").strip()
-
-    if not token:
-        raise ValidationError("Token is required.")
-
     try:
+        if not token:
+            return Response({"error": "Token is required."}, status=status.HTTP_400_BAD_REQUEST)
+
         token_obj = UserTokenAuth.objects.get(token=token)
         token_obj.delete()
         return Response({"message": "Token deleted successfully."}, status=status.HTTP_200_OK)
+
     except UserTokenAuth.DoesNotExist:
-        raise ValidationError("Invalid token.")
+        return Response({"error": "Invalid token."}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.exception("Unexpected error occurred")
+        return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['DELETE'])
-@handle_exceptions
 def delete_account(request):
+    """Handles user's account deletion."""
     token = request.data.get("token", "").strip()
-
-    if not token:
-        raise ValidationError("Token is required.")
-
     try:
+        if not token:
+            return Response({"error": "Token is required."}, status=status.HTTP_400_BAD_REQUEST)
+
         token_obj = UserTokenAuth.objects.get(token=token)
         user = token_obj.user
         user.delete()
         return Response({"message": "Account deleted successfully."}, status=status.HTTP_200_OK)
+
     except UserTokenAuth.DoesNotExist:
-        raise ValidationError("Invalid token.")
+        return Response({"error": "Invalid token."}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.exception("Unexpected error occurred")
+        return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
-@handle_exceptions
 def authenticate_token(request):
-    """Verify if the provided token is valid and return user data."""
+    """Checks if the provived token is valid and return the respective user data."""
     token = request.data.get("token", "").strip()
-
-    if not token:
-        raise ValidationError("Token is required.")
-
     try:
+        if not token:
+            return Response({"error": "Token is required."}, status=status.HTTP_400_BAD_REQUEST)
+
         token_obj = UserTokenAuth.objects.get(token=token)
         user = token_obj.user
         return Response({"username": user.username, "email": user.email}, status=status.HTTP_200_OK)
+
     except UserTokenAuth.DoesNotExist:
-        raise ValidationError("Invalid token.")
+        return Response({"error": "Invalid token."}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.exception("Unexpected error occurred")
+        return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
-@handle_exceptions
 def send_otp_email(request):
-    """Send an OTP to the user's email."""
+    """Sends otp to email for email verification."""
     token = request.data.get('token', '').strip()
-
-    if not token:
-        raise ValidationError("Token is required.")
+    test = True if int(os.getenv("TEST")) == 1 else False
 
     try:
+        if not token:
+            return Response({"error": "Token is required."}, status=status.HTTP_400_BAD_REQUEST)
+
         token_obj = UserTokenAuth.objects.get(token=token)
+        email = token_obj.user.email
+        details = send_email_otp(email, test)
+
+        if details["status"] == False:
+            return Response({"error": "Failed to send OTP email."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        token_obj.otp = details["otp"]
+        token_obj.save()
+        return Response({"message": f"OTP successfully sent to {email}"}, status=status.HTTP_200_OK)
+
     except UserTokenAuth.DoesNotExist:
-        raise ValidationError("Invalid token.")
+        return Response({"error": "Invalid token."}, status=status.HTTP_400_BAD_REQUEST)
 
-    email = token_obj.user.email
-
-    otp = 1234567 #send_email_otp(email)
-
-    token_obj.otp = otp
-    token_obj.save()
-
-    return Response({"message": f"OTP successfully sent to {email}"}, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.exception("Unexpected error occurred")
+        return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
-@handle_exceptions
 def send_otp_phoneno(request):
-    """Send an OTP to the user's phone number."""
+    """Sends otp to phone for phone number verification."""
     token = request.data.get("token", "").strip()
-
-    if not token:
-        raise ValidationError("Token is required.")
-
+    test = True if int(os.getenv("TEST")) == 1 else False
     try:
+        if not token:
+            return Response({"error": "Token is required."}, status=status.HTTP_400_BAD_REQUEST)
+
         token_obj = UserTokenAuth.objects.get(token=token)
+        phone_no = token_obj.user.phone_no
+        details = send_otp_phone(phone_no, test)
+        if details["status"] == False:
+            return Response({"error": "Failed to send OTP phone."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        token_obj.otp = details["otp"]
+        token_obj.save()
+        return Response({"message": f"OTP successfully sent to {phone_no}"}, status=status.HTTP_200_OK)
+
     except UserTokenAuth.DoesNotExist:
-        raise ValidationError("Invalid token.")
-
-    phone_no = token_obj.user.phone_no
-
-    otp = 1234567 #send_otp_phone(phone_no)
-
-    token_obj.otp = otp
-    token_obj.save()
-
-    return Response({"message": f"OTP successfully sent to {phone_no}"}, status=status.HTTP_200_OK)
+        return Response({"error": "Invalid token."}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.exception("Unexpected error occurred")
+        return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
-@handle_exceptions
 def check_otp(request):
-    """Validate the provided OTP."""
+    """Checks the if the give otp is valid for both email and phone number verification."""
     token = request.data.get("token", "").strip()
     otp = request.data.get("otp", "").strip()
     otp_type = request.data.get("otp_type", "").strip()
-
     try:
-        otp = int(otp)
-    except:
-        raise ValidationError("OPT must be an int.")
+        if not token:
+            return Response({"error": "Token is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not otp:
+            return Response({"error": "OTP is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not otp_type:
+            return Response({"error": "OTP Type is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-    if not token:
-        raise ValidationError("Token is required.")
-    if not otp:
-        raise ValidationError("OTP is required.")
-    if not otp_type:
-        raise ValidationError("OTP Type is required.")
+        try:
+            otp = int(otp)
+        except ValueError:
+            return Response({"error": "OTP must be an integer."}, status=status.HTTP_400_BAD_REQUEST)
 
-    try:
+
         token_obj = UserTokenAuth.objects.get(token=token)
-    except UserTokenAuth.DoesNotExist:
-        raise ValidationError("Invalid token.")
+        true_otp = token_obj.otp
 
-    true_otp = token_obj.otp
+        if not true_otp:
+            return Response({"error": "Send OTP first, no OTP found."}, status=status.HTTP_400_BAD_REQUEST)
 
-    if not true_otp:
-        raise ValidationError("Send OTP first, no OTP found.")
-
-    if true_otp == otp:
-        token_obj.otp = None
-        if otp_type == 'email':
-            token_obj.email_verified = True
-        elif otp_type == 'phone':
-            token_obj.phone_verified = True
+        if true_otp == otp:
+            token_obj.otp = None
+            if otp_type == 'email':
+                token_obj.email_verified = True
+            elif otp_type == 'phone':
+                token_obj.phone_verified = True
+            else:
+                return Response({"error": "OTP Type must be 'phone' or 'email'."}, status=status.HTTP_400_BAD_REQUEST)
+            token_obj.save()
+            return Response({"message": "OTP verified successfully."}, status=status.HTTP_200_OK)
         else:
-            raise ValidationError("OTP Type must be 'phone' or 'email'.")
-        token_obj.save()
-        return Response({"message": "OTP verified successfully."}, status=status.HTTP_200_OK)
-    else:
-        return Response({"message": "Invalid OTP."}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({"message": "Invalid OTP."}, status=status.HTTP_401_UNAUTHORIZED)
+
+    except UserTokenAuth.DoesNotExist:
+        return Response({"error": "Invalid token."}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.exception("Unexpected error occurred")
+        return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

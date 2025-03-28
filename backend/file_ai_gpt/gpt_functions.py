@@ -1,96 +1,319 @@
-# Imports
-from openai import OpenAI
+from typing import Dict
+import openai
 import os
 
-# Get the openai client with api key
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Class including all functions related to ChatGPT API
+class GPTFunctions:
+    def __init__(self, client: openai.OpenAI = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY")), test: bool = True):
+        print("OpenAI Api Key initiated")
+        self.client = client
+        self.test = test
 
-# Logging that the API key is on
-print('\n---\nAPI KEY INITIATED\n---\n')
+    def generate_initial_content(self, prompt: str, test: bool = True) -> Dict[str, str]:
+        """
+        Generate initial content based on user prompt.
+        Returns content in a structured format suitable for frontend editing.
+        """
+        system_message = """Generate detailed content based on the user's prompt, optimized for LaTeX conversion. Your response should be flexible to handle ANY type of LaTeX document, including but not limited to:
 
-# Function to get the code required to make an excel file according to the query
-def xl_query(query):
-    # Logging that Excel Request has been made
-    print("\n---\nExcel Request\n---\n")
+        DOCUMENT TYPES:
+        - Academic papers, articles, reports
+        - Letters (formal, informal, business)
+        - Resumes/CVs
+        - Presentations/slides
+        - Books/manuscripts
+        - Mathematical documents
+        - Technical documentation
+        - Thesis/dissertation
+        - Business documents
+        - Newsletters
+        - Contracts/legal documents
 
-    # Get response from chatgpt
-    result = client.chat.completions.create(
-        model="gpt-3.5-turbo-0125",
-        messages=[
-            {
-                'role': 'system',
-                'content': (
-                    "You are an AI Chatbot designed to generate Python code for Excel reports using the openpyxl library and dont make silly mistakes, dont hallucinate and include all imports you used."
-                    "When asked to create an Excel report, provide the complete code that includes:\n"
-                    "1. Creating a table with the provided data.\n"
-                    "2. Generating a chart based on that data.\n"
-                    "Respond with the code formatted as a Python script in a code block:\n"
-                    "```excel_code_python\n"
-                    "# Your complete code here\n"
-                    "```\n"
-                    "Make sure to include all necessary imports, and structure the code so it can be run directly."
+        STRUCTURAL ELEMENTS:
+        - Title/headers
+        - Sections and subsections
+        - Tables and lists
+        - Equations and formulas
+        - Theorems and proofs
+        - Footnotes and citations
+        - Table of contents
+        - Bibliographies
+        - Appendices
+        - Indices
+
+        FORMATTING CAPABILITIES:
+        - Typography (font styles, sizes)
+        - Multi-column layouts
+        - Page numbering
+        - Custom margins/spacing
+        - Headers and footers
+        - Cross-references
+        - Custom environments
+        - Text alignment
+        - Color formatting
+        - Page layouts
+
+        Format the content with clear structure that can be easily edited. Include appropriate sectioning based on the document type requested.
+
+        For visual elements (charts, diagrams, etc.), provide clear text descriptions of what should be generated using native LaTeX packages (tikz, pgf-pie, etc.).
+
+        If the user doesn't specify a document type, default to a standard article format with:
+        - Title
+        - Introduction
+        - Main content sections
+        - Conclusion"""
+
+        example_output = """Title Page:
+                            - Title: Creating and Manipulating Excel Files with Python
+                            - Subtitle: Using the `openpyxl` Library for Excel Automation
+                            - Author: Alex Doe
+                            - Date: October 2024
+
+                            Table of Contents:
+                            1. Introduction
+                            2. Prerequisites
+                            3. Installation of Required Libraries
+                            4. Code for Creating a Basic Excel File
+                            5. Explanation of Code Components
+                            6. Conclusion
+                            7. References
+
+                            Content:
+
+                            1. Introduction
+                            In recent years, automation of repetitive tasks has become increasingly valuable in data analysis and reporting. One of the commonly automated tasks involves creating and modifying Excel files programmatically. This document provides a comprehensive overview of how to use Python's `openpyxl` library to perform these tasks.
+
+                            2. Prerequisites
+                            Before proceeding, the reader should have a basic understanding of Python programming and familiarity with Excel.
+
+                            3. Installation of Required Libraries
+                            The primary library required for this tutorial is `openpyxl`. To install it, run the following command in your terminal:
+                                pip install openpyxl
+
+                            4. Code for Creating a Basic Excel File
+                            This section provides Python code to create a simple Excel file and populate it with data. The code can be easily adapted for other applications requiring automated Excel manipulation.
+
+                            5. Explanation of Code Components
+                            Each section of the code is explained, from creating a new workbook and worksheet to saving the file.
+
+                            6. Conclusion
+                            Automating Excel tasks using Python can greatly enhance productivity and streamline data workflows.
+
+                            7. References
+                            For more information on `openpyxl`, refer to the official documentation at https://openpyxl.readthedocs.io/."""
+
+        try:
+            if not self.test:
+                response = self.client.chat.completions.create(
+                    model="gpt-3.5-turbo-0125",
+                    messages=[
+                        {"role": "system", "content": system_message},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.7,
+                    max_tokens=2000
                 )
-            },
-            {
-                'role': 'user',
-                'content': query
+            return {
+                "status": "success",
+                "content": example_output if self.test else response.choices[0].message.content
+                }
+        
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def convert_to_latex(self, edited_content: str, test: bool = True) -> Dict[str, str]:
+        """
+        Convert the edited content into LaTeX code ready for PDF compilation.
+        """
+
+        system_message = """Convert the provided content into complete, compilable LaTeX code following these strict requirements:
+
+        CORE REQUIREMENTS:
+        1. Generate 100% self-contained LaTeX code that compiles directly to PDF
+        2. Include ALL necessary packages in the preamble
+        3. Use appropriate document class and structure
+        4. Handle all special characters and encoding
+        5. Implement proper spacing and layout
+
+        GRAPHICS AND IMAGES:
+        IMPORTANT: DO NOT include or reference external images or files
+        Instead:
+        ✓ USE: Native LaTeX drawing capabilities:
+          - TikZ for diagrams and charts
+          - pgf-pie for pie charts
+          - Native tables
+          - Mathematical equations
+          - Custom drawings using LaTeX primitives
+        ✗ DO NOT USE:
+          - \includegraphics
+          - External image files
+          - External data files
+          - Web images or URLs
+
+        FORMATTING:
+        1. Use proper LaTeX environments
+        2. Implement consistent spacing
+        3. Handle mathematical content correctly
+        4. Use appropriate sectioning commands
+        5. Include necessary definitions for custom commands
+
+        METADATA:
+        1. Set appropriate document properties
+        2. Include necessary language support
+        3. Configure page layout
+        4. Set up headers/footers if needed
+
+        Return ONLY the complete LaTeX code that can be directly compiled to PDF without any external dependencies."""
+
+        example_output = r"""\documentclass{article}
+                            \title{Creating and Manipulating Excel Files with Python}
+                            \author{Alex Doe}
+                            \date{October 2024}
+
+                            \begin{document}
+
+                            \maketitle
+
+                            \tableofcontents
+                            \newpage
+
+                            \section{Introduction}
+                            In recent years, automation of repetitive tasks has become increasingly valuable in data analysis and reporting. One commonly automated task is creating and modifying Excel files programmatically. This document provides a brief overview of how to use Python's \texttt{openpyxl} library to perform these tasks.
+
+                            \section{Prerequisites}
+                            The reader should have a basic understanding of Python programming and familiarity with Excel.
+
+                            \section{Installation of Required Libraries}
+                            The primary library required for this tutorial is \texttt{openpyxl}. To install it, use:
+                            \begin{verbatim}
+                            pip install openpyxl
+                            \end{verbatim}
+
+                            \section{Conclusion}
+                            Automating Excel tasks with Python can enhance productivity and streamline data workflows.
+
+                            \end{document}
+                            """
+
+        try:
+            if not self.test and not test:
+                response = self.client.chat.completions.create(
+                    model="gpt-3.5-turbo-0125",
+                    messages=[
+                        {"role": "system", "content": system_message},
+                        {"role": "user", "content": f"""
+                            Content to convert to LaTeX:
+                            {edited_content}
+                        
+                            Please provide complete LaTeX code that can be compiled directly to PDF.
+                        """}
+                    ],
+                    temperature=0.7,
+                    max_tokens=2000
+                )
+            
+            return {
+                "status": "success",
+                "latex_code": example_output if self.test else response.choices[0].message.content
             }
-        ],
-        temperature=0.7,
-        max_completion_tokens=1500
-    )
+        
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
 
-    # Extract the response/message from the content
-    response =  result.choices[0].message.content
+    def generate_excel_code(self, query: str, test: bool = True) -> Dict[str, str]:
+        """
+        Generate Python code for creating Excel reports based on the query.
+        Returns complete, runnable code using openpyxl.
+        
+        Args:
+            query: User's query describing the desired Excel report
+            
+        Returns:
+            Dict containing the generated code or error message
+        """
 
-    # Extract the code
-    start = response.find("```excel_code_python") + len("```excel_code_python\n")
-    end = response.find("```", start)
-    xl_code = response[start:end].strip()
+        system_message = """You are an AI Chatbot designed to generate Python code for Excel reports using the openpyxl library.
+        When generating code, follow these requirements:
 
-    # Reuturn the extracted code
-    return xl_code
+        1. Include ALL necessary imports
+        2. Create complete, runnable code
+        3. Include proper error handling
+        4. Add comments explaining key steps
+        5. Format data appropriately
+        6. Include both table creation and chart generation
+        7. Use best practices for openpyxl
+        8. Handle file saving safely
+        9. Include data validation where appropriate
+        10. Format cells and charts professionally
+        11. Include the code in ```excel_code_python ```
 
-# Function toget the latex code required to compile a pdf according to the query
-def pdf_query(query):
-    # Logging that a PDF Request has been made
-    print("---\nPDF Request\n---\n")
+        DO NOT:
+        - Make assumptions about undefined variables
+        - Use external dependencies beyond standard libraries and openpyxl
+        - Leave any code incomplete
+        - Skip error handling
+        """
 
-    # Get the response from chatgpt
-    result = client.chat.completions.create(
-        model="gpt-3.5-turbo-0125",
-        messages=[
-            {'role': 'system', 'content': """You are an AI specialized in generating LaTeX code for PDF creation. Your task is to provide complete, self-contained LaTeX code within ```latex_code_pdf tags, including all necessary packages and a comprehensive preamble. The code must be accurate, error-free, and fully compilable using MiKTeX's pdfLaTeX.
+        example_output = """from openpyxl import Workbook
 
-    Key requirements:
-    1. Include all required packages, especially for charts and graphics (e.g., tikz, pgf-pie).
-    2. Ensure the preamble is complete with everything needed for charts, images, and graphics.
-    3. Use only importable graphics; do not include external images.
-    4. Avoid using lipsum or example images.
-    5. Use 'ht' instead of 'h' for float placement.
-    6. Do not use pgfplots.
-    7. Always provide the full LaTeX code, even if a PDF is not explicitly requested.
-    8. Creative or placeholder content can be added if the user hasn't specified details.
+# Create a new workbook and select the active worksheet
+wb = Workbook()
+ws = wb.active
 
-    When generating charts:
-    - For pie charts, ensure '\\pie' is properly imported and used.
-    - For bar charts, use TikZ or other compatible packages.
-    - Images assumed to be existent are stritcly prohibited do not include images only include graphics.
+# Set the title for the worksheet
+ws.title = "Sample Sheet"
 
-    The LaTeX document must be fully functional and compile without errors. Provide the complete LaTeX code within the specified tags, ready for direct compilation to PDF."""},
-            {'role': 'user', 'content': query}
-        ],
-        temperature=0.7,
-        max_tokens=1500
-    )
+# Add some data to the worksheet
+ws["A1"] = "ID"
+ws["B1"] = "Name"
+ws["C1"] = "Score"
 
-    # Get the response/message from the content of chatgpt
-    response =  result.choices[0].message.content
+# Sample data
+data = [
+    (1, "Alice", 85),
+    (2, "Bob", 92),
+    (3, "Charlie", 78)
+]
 
-    # Extract the latex code
-    start = response.find("```latex_code_pdf") + len("```latex_code_pdf\n")
-    end = response.find("```", start)
-    latex_code = response[start:end].strip()
+# Append rows of data
+for row in data:
+    ws.append(row)
 
-    # Return the extracted latex code
-    return latex_code
+# Save the workbook
+wb.save("sample.xlsx")
+                            """
+
+        try:
+            if not self.test and not test:
+                response = self.client.chat.completions.create(
+                    model="gpt-3.5-turbo-0125",
+                    messages=[
+                        {"role": "system", "content": system_message},
+                        {"role": "user", "content": query}
+                    ],
+                    temperature=0.7,
+                    max_tokens=2000
+                )
+                
+                # Extract code from response
+                content = response.choices[0].message.content
+                
+                # Find the code block
+                code_start = content.find("```excel_code_python")
+                if code_start == -1:
+                    code_start = content.find("```")
+                code_start = content.find("\n", code_start) + 1
+                
+                code_end = content.find("```", code_start)
+                if code_end == -1:
+                    code_end = len(content)
+                    
+                excel_code = content[code_start:code_end].strip()
+            
+            return {
+                "status": "success",
+                "excel_code": example_output if self.test else excel_code
+            }
+        
+        except Exception as e:
+            return {"status": "error", "message": str(e)}

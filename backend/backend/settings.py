@@ -90,9 +90,15 @@ DATABASES = {
         'PASSWORD': 'rishipaliwal@321',  
         'HOST': 'localhost', 
         'PORT': '3306',  
+        'TEST': {
+            'NAME': 'fileai_test',
+            'MIRROR': 'default',
+            'CREATE_DB': False, 
+        },
     }
 }
 '''
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
@@ -101,6 +107,11 @@ DATABASES = {
         'PASSWORD': os.getenv("DB_PASSWORD"),
         'HOST': os.getenv("DB_HOST"),
         'PORT': os.getenv("DB_PORT"),
+        'TEST': {
+            'NAME': os.getenv("fileai_test"),
+            'MIRROR': 'default',
+            'CREATE_DB': False
+        }
     }
 }
 

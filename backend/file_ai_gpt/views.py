@@ -6,25 +6,34 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from user_auth.models import UserTokenAuth
-from .gpt_functions_class import GPTFunctions
+from .gpt_functions import GPTFunctions
 
 from openpyxl import Workbook
 import os
 import subprocess
 import uuid
+import logging
 import re
 import io
 
-# Initialize GPTFunctions class
-gpt_functions = GPTFunctions()
+# Initialize logger
+logger = logging.getLogger(__name__)
 
-'''Helper Functions'''
+
+# Initialize GPTFunctions class
+gpt_functions = GPTFunctions(
+    test=True # Will not use api, will give example outputs to save tokens, set as False for production enviroment
+)
+
+
+# Utility Functions
 
 def is_user_verfied(token_obj: UserTokenAuth) -> bool:
+    """Check if the user has verified both email and phone."""
     return token_obj.email_verified and token_obj.phone_verified
 
-# Check if user has remaining requests and decrease them by one
 def limit_requests(token_obj: UserTokenAuth) -> bool:
+    """Limit users to 3 requests per day."""
     today = timezone.now().date()
     if token_obj.last_request_date != today:
         token_obj.request_count = 1
@@ -32,7 +41,7 @@ def limit_requests(token_obj: UserTokenAuth) -> bool:
         token_obj.save()
         return True
 
-    elif token_obj.request_count >= 5:
+    elif token_obj.request_count >= 3:
         return False    
     
     else:
@@ -41,37 +50,45 @@ def limit_requests(token_obj: UserTokenAuth) -> bool:
         return True
     
 def validate_token(token: str) -> UserTokenAuth | bool:
+    """Validate the user's token."""
     try:
         token_obj = UserTokenAuth.objects.get(token=token)
         return token_obj
     except UserTokenAuth.DoesNotExist:
         return False
 
-'''API Views'''
+
+
+# API Views
 
 @api_view(['POST'])
 def xl_request(request):
+    """Generate and return an Excel file based on a user prompt."""
     try:
         prompt = request.data.get("query", "").strip()
         token = request.data.get("token", "").strip()
+        test = True if int(os.getenv("TEST")) == 1 else False
 
         if not prompt:
             return Response({"error": "No prompt provided"}, status=status.HTTP_400_BAD_REQUEST)
         
         token_obj = validate_token(token)
         if not token_obj:
-            return Response({"error": "Token is invalid"}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({"error": "Token is invalid"}, 
+                            status=status.HTTP_401_UNAUTHORIZED)
         
         if not is_user_verfied(token_obj):
-            return Response({"error": "You have not verified your account please go through verfication: \n Delete this account and Remake it WITH OTP VERIFICATION OF BOTH PHONE AND EMAIL"}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"error": "You have not verified your account please go through verfication: \n Delete this account and Remake it WITH OTP VERIFICATION OF BOTH PHONE AND EMAIL"}, 
+                            status=status.HTTP_403_FORBIDDEN)
 
         if not limit_requests(token_obj) :
-            return Response({"error": "You have ran out of the 3 daily requests, Try again tommorow."}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"error": "You have ran out of the 3 daily requests, Try again tommorow."}, 
+                            status=status.HTTP_403_FORBIDDEN)
 
-        result = gpt_functions.generate_excel_code(prompt)
+        result = gpt_functions.generate_excel_code(prompt, test)
     
         if not (result['status'] == 'success'):
-            print(result["message"])
+            logger.error(result["message"])
             return Response(
                 {"error": result["message"]}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -88,7 +105,7 @@ def xl_request(request):
             filename = match.group(1)
             xl_code = re.sub(save_pattern, 'wb.save(output)', xl_code)
         else:
-            filename = "generated_excel.xlsx"
+            filename = "excel.xlsx"
 
         output = io.BytesIO()
         exec(xl_code, {"output": output, "io": io, "Workbook": Workbook})
@@ -112,9 +129,11 @@ def xl_request(request):
 # API request to get a pdf file made using latex according to the content 
 @api_view(['POST'])
 def pdf_request(request):
+    """Generate a PDF file based on user's content and return it."""
     try:
         content = request.data.get('content', '')
         token = request.data.get("token", "").strip()
+        test = True if int(os.getenv("TEST")) == 1 else False
 
         if not content:
             return Response({"error": "No content provided"}, status=status.HTTP_400_BAD_REQUEST)
@@ -124,15 +143,17 @@ def pdf_request(request):
             return Response({"error": "Token is invalid"}, status=status.HTTP_401_UNAUTHORIZED)
 
         if not is_user_verfied(token_obj):
-            return Response({"error": "You have not verified your account please go through verfication: \n Delete this account and Remake it WITH OTP VERIFICATION OF BOTH PHONE AND EMAIL"}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"error": "You have not verified your account please go through verfication: \n Delete this account and Remake it WITH OTP VERIFICATION OF BOTH PHONE AND EMAIL"}, 
+                            status=status.HTTP_403_FORBIDDEN)
 
         if not limit_requests(token_obj) :
-            return Response({"error": "You have ran out of the 3 daily requests, Try again tommorow."}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"error": "You have ran out of the 3 daily requests, Try again tommorow."}, 
+                            status=status.HTTP_403_FORBIDDEN)
 
-        result = gpt_functions.convert_to_latex(content)
+        result = gpt_functions.convert_to_latex(content, test)
 
         if not (result['status'] == 'success'):
-            print(result["message"])
+            logger.error(result["message"])
             return Response(
                 {"error": result["message"]}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -180,7 +201,7 @@ def pdf_request(request):
             return response
         
         except subprocess.CalledProcessError as e:
-            print(e)
+            logger.error(e)
             return Response({
                 "error": f"PDF generation failed: {e}",
                 "stdout": e.stdout,
@@ -188,22 +209,25 @@ def pdf_request(request):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
         except subprocess.TimeoutExpired:
+            # Delete temporary files even if a error comes
             subprocess.Popen(['python', '-c', f"import os, time; time.sleep(1); os.remove(r'{tex_file}'); os.remove(r'{log_file}');"])
             return Response({
                 "error": "PDF generation took too long. Please refine your query or prompt."
             }, status=status.HTTP_504_GATEWAY_TIMEOUT)
 
     except Exception as e:
-        print(e)
+        logger.error(e)
         return Response({"error": f"An error occurred: {str(e)}"}, 
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
 
 @api_view(['POST'])
 def pdf_content_request(request):
+    """Generate initial PDF content based on a user query."""
     try:
         prompt = request.data.get("query", "")
         token = request.data.get("token", "").strip()
+        test = True if int(os.getenv("TEST")) == 1 else False
 
         if not prompt:
             return Response(
@@ -213,15 +237,18 @@ def pdf_content_request(request):
 
         token_obj = validate_token(token)
         if not token_obj:
-            return Response({"error": "Token is invalid"}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({"error": "Token is invalid"}, 
+                            status=status.HTTP_401_UNAUTHORIZED)
 
         if not is_user_verfied(token_obj):
-            return Response({"error": "You have not verified your account please go through verfication: \n Delete this account and Remake it WITH OTP VERIFICATION OF BOTH PHONE AND EMAIL"}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"error": "You have not verified your account please go through verfication: \n Delete this account and Remake it WITH OTP VERIFICATION OF BOTH PHONE AND EMAIL"}, 
+                            status=status.HTTP_403_FORBIDDEN)
 
         if not limit_requests(token_obj):
-            return Response({"error": "You have ran out of the 3 daily requests, Try again tommorow."}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"error": "You have ran out of the 3 daily requests, Try again tommorow."}, 
+                            status=status.HTTP_403_FORBIDDEN)
 
-        result = gpt_functions.generate_initial_content(prompt)
+        result = gpt_functions.generate_initial_content(prompt, test)
         
         if result["status"] == "success":
             return Response(result, status=status.HTTP_200_OK)
