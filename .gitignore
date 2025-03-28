@@ -6,10 +6,7 @@ backend/.env
 venv
 
 # Python Temporary Files
-backend/__pycache__
-backend/backend/__pycache__
-backend/file_ai_gpt/__pycache__
-backend/user_auth/__pycache__
+**/__pycache__/
 
 # API temporary files
 backend/file_ai_gpt/api_temp/*
