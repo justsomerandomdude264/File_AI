@@ -12,8 +12,8 @@ RUN npm install --production=false
 # Copy the rest of the project files
 COPY . .
 
-# Build the project
-RUN npm run build
+# Set environment to production
+ENV NODE_ENV=production
 
-# Start the server
-CMD ["npm", "start"]
+# Build the project at runtime and start the server
+CMD ["sh", "-c", "npm run build && npm start"]

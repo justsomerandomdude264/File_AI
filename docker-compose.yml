@@ -7,12 +7,13 @@ services:
       - .env
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./database/perm.sql:/docker-entrypoint-initdb.d/perm.sql
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h db -u root --password=$MYSQL_ROOT_PASSWORD || exit 1"]
-      interval: 50s
+      interval: 25s
       timeout: 70s
-      retries: 15
+      retries: 1500
   
   ### BACKEND (django)
   backend:
@@ -38,6 +39,8 @@ services:
     build:
       context: ./frontend_nextjs
       dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=production
     volumes:
       - ./frontend_nextjs:/app
 

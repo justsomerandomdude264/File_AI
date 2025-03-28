@@ -1,3 +1,4 @@
 __pycache__
-.env
-.gitignore
+backend/__pycache__
+file_ai_gpt/__pycache__
+user_auth/__pycache__
